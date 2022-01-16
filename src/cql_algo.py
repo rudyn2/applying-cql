@@ -1,6 +1,8 @@
 from src.cql_trainer import CQLTrainer
 from src.buffer import OfflineReplayBuffer
+from src.evaluator import Evaluator
 from tqdm import tqdm
+import numpy as np
 import wandb
 
 
@@ -8,36 +10,41 @@ class CQLAlgorithm(object):
 
     def __init__(self,
                  trainer: CQLTrainer,
+                 evaluator: Evaluator,
                  replay_buffer: OfflineReplayBuffer,
                  num_epochs: int,
                  batch_size: int,
-                 num_trains_per_train_loop: int,
-                 num_train_loops_per_epoch: int = 1,
-                 min_num_steps_before_training: int = 0,
+                 num_trains_per_epoch: int,
+                 num_eval_episodes: int,
                  progress_bar: bool = True,
                  log_wandb: bool = False,
                  ):
 
         self.trainer = trainer
+        self.evaluator = evaluator
         self.batch_size = batch_size
         self.replay_buffer = replay_buffer
         self.num_epochs = num_epochs
-        self.num_trains_per_train_loop = num_trains_per_train_loop
-        self.num_train_loops_per_epoch = num_train_loops_per_epoch
-        self.min_num_steps_before_training = min_num_steps_before_training
+        self.num_trains_per_epoch = num_trains_per_epoch
+        self.num_eval_per_epoch = num_eval_episodes
         self.progress_bar = progress_bar
         self.log_wandb = log_wandb
 
     def train(self):
         for epoch in range(self.num_epochs):
-            for i in range(self.num_train_loops_per_epoch):
-                self.training_mode(True)
-                loop_iter = range(self.num_trains_per_train_loop)
-                loop_iter = tqdm(loop_iter, "Training") if self.progress_bar else loop_iter
-                for _ in loop_iter:
-                    train_data = self.replay_buffer.random_batch(self.batch_size)
-                    self.trainer.train(train_data)
-                self.training_mode(False)
+
+            # TRAINING
+            self.training_mode(True)
+            loop_iter = range(self.num_trains_per_epoch)
+            loop_iter = tqdm(loop_iter, "Training") if self.progress_bar else loop_iter
+            for _ in loop_iter:
+                train_data = self.replay_buffer.random_batch(self.batch_size)
+                self.trainer.train(train_data)
+            self.training_mode(False)
+
+            # EVALUATION
+            rewards = self.evaluator.evaluate(self.trainer.get_policy(), self.num_eval_per_epoch)
+            print(f"epoch: {epoch}, average return: {np.mean(rewards)}")
             self._end_epoch(epoch)
 
     def _end_epoch(self, epoch: int):

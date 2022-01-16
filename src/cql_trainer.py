@@ -449,6 +449,9 @@ class CQLTrainer(object):
         ]
         return base_list
 
+    def get_policy(self):
+        return self.policy
+
     def get_snapshot(self):
         return dict(
             policy=self.policy,
@@ -495,11 +498,11 @@ class CQLTrainer(object):
 
 
 if __name__ == "__main__":
-    from src.models.policy import TanhGaussianPolicy
-    from src.models.mlp import FlattenMlp
+    from src.policy import TanhGaussianPolicy
+    from src.flatten_mlp import FlattenMlp
 
-    obs_dim = 762       # expl_env.observation_space.low.size
-    action_dim = 2      # eval_env.action_space.low.size
+    obs_dim = 15
+    action_dim = 2
     M = 128
 
     qf1 = FlattenMlp(

@@ -18,8 +18,8 @@ class D3RLPYDataset(object):
             transition = episode[0]
             while transition.next_transition:
                 obs = transition.observation
-                act = transition.action
-                rew = 4 - transition.reward
+                act = transition.action / 2
+                rew = transition.reward
                 next_obs = transition.next_observation
                 done = transition.terminal
 
