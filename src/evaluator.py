@@ -7,12 +7,8 @@ import torch
 
 class Evaluator:
 
-    def __init__(self, task: str, max_steps: int = 1000):
-        if task == "pendulum":
-            self.env = gym.make("Pendulum-v1")
-        else:
-            raise ValueError("Cant evaluate in that task")
-
+    def __init__(self, env, max_steps: int = 1000):
+        self.env = env
         self.max_steps = max_steps
 
     def evaluate(self, policy: TanhGaussianPolicy, n_episodes: int = 100, render: bool = False):
@@ -24,8 +20,8 @@ class Evaluator:
                 if render:
                     self.env.render()
                 with torch.no_grad():
-                    action = policy(ptu.tensor(obs), deterministic=True)[0] * 2
-                    action = action.cpu().numpy().tolist()
+                    action = policy(ptu.tensor(obs.astype(np.float32)), deterministic=True)[0]
+                    action = action.cpu().numpy()
                 obs, rew, done, info = self.env.step(action)
                 obs = obs.squeeze()
                 ep_rewards.append(rew)

@@ -1,9 +1,11 @@
+import d4rl
+import gym
+
 import src.utils as ptu
 from src.policy import TanhGaussianPolicy
 from src.cql_trainer import CQLTrainer
 from src.flatten_mlp import FlattenMlp
-from src.buffer import OfflineReplayBuffer
-from src.dataset import D3RLPYDataset
+from src.d4rl_buffer import D4RLBuffer
 from src.cql_algo import CQLAlgorithm
 from src.evaluator import Evaluator
 import argparse
@@ -13,18 +15,15 @@ import wandb
 
 def experiment(variant: dict):
     wandb_config = variant
-    if variant["algorithm_kwargs"]["log_wandb"]:
+    if variant["wandb"]:
         wandb.init(project="applying-cql", entity="rudyn", config=variant)
         wandb_config = wandb.config
 
-    if wandb_config["task"] == "pendulum":
-        obs_dim = 3
-        action_dim = 1
-    elif wandb_config["task"] == "hopper":
-        obs_dim = 11
-        action_dim = 3
-    else:
-        raise ValueError
+    env = gym.make(wandb_config["task"])
+    dataset = d4rl.qlearning_dataset(env)
+    buffer = D4RLBuffer(dataset)
+    obs_dim = env.observation_space.shape[0]
+    action_dim = env.action_space.shape[0]
 
     M = wandb_config["layer_size"]
     qf1 = FlattenMlp(
@@ -52,23 +51,38 @@ def experiment(variant: dict):
         action_dim=action_dim,
         hidden_sizes=[M, M, M]
     )
-    offline_dataset = D3RLPYDataset(data_path=wandb_config["offline_buffer"])
-    replay_buffer = OfflineReplayBuffer(offline_dataset=offline_dataset)
+
     trainer = CQLTrainer(
         policy=policy,
         qf1=qf1,
         qf2=qf2,
         target_qf1=target_qf1,
         target_qf2=target_qf2,
-        **wandb_config['trainer_kwargs']
+        max_q_backup=True if wandb_config['max_q_backup'] == 'True' else False,
+        deterministic_backup=True if wandb_config['deterministic_backup'] == 'True' else False,
+        min_q_weight=wandb_config['min_q_weight'],
+        policy_lr=wandb_config['policy_lr'],
+        qf_lr=wandb_config['qf_lr'],
+        min_q_version=wandb_config['min_q_version'],
+        reward_scale=wandb_config['reward_scale'],
+        with_lagrange=wandb_config['lagrange_thresh'] > 0,
+        lagrange_thresh=wandb_config['lagrange_thresh'],
+        use_automatic_entropy_tuning=bool(wandb_config['use_automatic_entropy_tuning']),
+        num_random=wandb_config['num_random'],
+        num_qs=wandb_config['num_qs'],
     )
-    evaluator = Evaluator(task=wandb_config["task"])
+    evaluator = Evaluator(env)
     # replace this
     algorithm = CQLAlgorithm(
         trainer=trainer,
         evaluator=evaluator,
-        replay_buffer=replay_buffer,
-        **wandb_config['algorithm_kwargs']
+        replay_buffer=buffer,
+        num_epochs=wandb_config['epochs'],
+        batch_size=wandb_config['batch_size'],
+        num_trains_per_epoch=wandb_config['num_trains_per_epoch'],
+        num_eval_episodes=wandb_config['num_eval_episodes'],
+        progress_bar=wandb_config['progress_bar'],
+        log_wandb=wandb_config['wandb']
     )
 
     print('TRAINING')
@@ -77,44 +91,7 @@ def experiment(variant: dict):
 
 
 if __name__ == "__main__":
-    # noinspection PyTypeChecker
-    variant = dict(
-        algorithm="CQL",
-        version="normal",
-        algorithm_kwargs=dict(
-            num_epochs=500,
-            num_trains_per_epoch=5,               # n batchs per epoch
-            batch_size=4,
-        ),
-        trainer_kwargs=dict(
-            discount=0.99,
-            soft_target_tau=5e-3,
-            policy_lr=1E-4,
-            qf_lr=3E-4,
-            reward_scale=1,
-            use_automatic_entropy_tuning=True,
-
-            # Target nets/ policy vs Q-function update
-            policy_eval_start=0,
-            num_qs=2,
-
-            # min Q
-            temp=0.1,
-            min_q_version=3,
-            min_q_weight=1.0,
-
-            # lagrange
-            with_lagrange=True,
-            lagrange_thresh=10.0,
-
-            # extra params
-            num_random=10,
-            max_q_backup=False,
-            deterministic_backup=False,
-        ),
-    )
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data", required=True, type=str, help="Data path.")
     parser.add_argument("--task", required=True, type=str, help="Name of the task [pendulum].")
     parser.add_argument("--checkpoint_path", required=False, default="", type=str, help="Checkpoint path.")
 
@@ -124,61 +101,34 @@ if __name__ == "__main__":
     parser.add_argument("--num_trains_per_epoch", default=10, type=int, help="Num batch updates per epoch.")
     parser.add_argument("--num_eval_episodes", default=10, type=int, help="Num batch updates per epoch.")
     parser.add_argument("--gpu", default='0', type=str)
+
+    # TRAINER KWARGS
     # if we want to try max_{a'} backups, set this to true
     parser.add_argument("--max_q_backup", type=str, default="False")
     # defaults to true, it does not backup entropy in the Q-function, as per Equation 3
     parser.add_argument("--use_automatic_entropy_tuning", type=int, default=1)
     parser.add_argument("--deterministic_backup", type=str, default="True")
+    parser.add_argument('--temp', default=1.0, type=float)
     # the value of alpha, set to 5.0 or 10.0 if not using lagrange
+    parser.add_argument('--num_qs', default=2, type=float)
     parser.add_argument('--min_q_weight', default=1.0, type=float)
-    parser.add_argument('--policy_lr', default=1e-4, type=float)  # Policy learning rate
-    parser.add_argument('--qf_lr', default=3e-4, type=float)  # Policy learning rate
+    parser.add_argument('--policy_lr', default=1e-3, type=float)  # Policy learning rate
+    parser.add_argument('--qf_lr', default=1e-3, type=float)  # Policy learning rate
+    parser.add_argument('--soft_target_tau', default=1e-2, type=float)  # soft target update
     parser.add_argument('--min_q_version', default=3, type=int)  # min_q_version = 3 (CQL(H)), version = 2 (CQL(rho))
     parser.add_argument('--reward_scale', default=1.0, type=float)
+    parser.add_argument('--num_random', default=10, type=int)
 
     # the value of tau, corresponds to the CQL(lagrange) version
     parser.add_argument('--lagrange_thresh', default=5.0, type=float)
     parser.add_argument("--wandb", default=True, type=bool, help="Wheter to log in wandb or not")
-
     parser.add_argument("--progress-bar", action="store_true", help="Wheter to use progress bar or not")
     parser.add_argument('--seed', default=10, type=int)
 
     args = parser.parse_args()
-
-    # TRAINER KWARGS
-    variant['trainer_kwargs']['max_q_backup'] = (True if args.max_q_backup == 'True' else False)
-    variant['trainer_kwargs']['deterministic_backup'] = (True if args.deterministic_backup == 'True' else False)
-    variant['trainer_kwargs']['min_q_weight'] = args.min_q_weight
-    variant['trainer_kwargs']['policy_lr'] = args.policy_lr
-    variant['trainer_kwargs']['qf_lr'] = args.policy_lr
-    variant['trainer_kwargs']['min_q_version'] = args.min_q_version
-    variant['trainer_kwargs']['reward_scale'] = args.reward_scale
-    variant['trainer_kwargs']['lagrange_thresh'] = args.lagrange_thresh
-    variant['trainer_kwargs']['use_automatic_entropy_tuning'] = bool(args.use_automatic_entropy_tuning)
-    if args.lagrange_thresh <= 0.0:
-        variant['trainer_kwargs']['with_lagrange'] = False
-
-    # ALGORITHM KWARGS
-    variant["algorithm_kwargs"]["progress_bar"] = args.progress_bar
-    variant["algorithm_kwargs"]["log_wandb"] = args.wandb
-    variant["algorithm_kwargs"]["batch_size"] = args.batch_size
-    variant["algorithm_kwargs"]["num_epochs"] = args.epochs
-    variant["algorithm_kwargs"]["num_trains_per_epoch"] = args.num_trains_per_epoch
-    variant["algorithm_kwargs"]["num_eval_episodes"] = args.num_eval_episodes
-    if args.checkpoint_path != "":
-        variant["algorithm_kwargs"]["checkpoint_metric"] = "dataset_q1_values"
-        variant["algorithm_kwargs"]["save_checkpoint"] = True
-        variant["algorithm_kwargs"]["checkpoint_path"] = args.checkpoint_path
-
-    # GENERAL ARGS
-    variant["offline_buffer"] = args.data
-    variant["task"] = args.task
-    variant['seed'] = args.seed
-    variant['layer_size'] = args.layer_size
-
     rnd = np.random.randint(low=0, high=1000000)
     ptu.set_gpu_mode(True)
 
-    experiment(variant)
+    experiment(vars(args))
 
 

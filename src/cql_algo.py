@@ -44,15 +44,16 @@ class CQLAlgorithm(object):
 
             # EVALUATION
             rewards = self.evaluator.evaluate(self.trainer.get_policy(), self.num_eval_per_epoch)
+            additional_metrics = dict(mean_return=np.mean(rewards),
+                                      max_return=np.max(rewards),
+                                      min_return=np.min(rewards))
             print(f"epoch: {epoch}, average return: {np.mean(rewards)}")
-            self._end_epoch(epoch)
 
-    def _end_epoch(self, epoch: int):
-        self.trainer.end_epoch(epoch)
-        if self.log_wandb:
-            self._log_stats_wandb(epoch)
+            self.trainer.end_epoch(epoch)
+            if self.log_wandb:
+                self._log_stats_wandb(epoch, **additional_metrics)
 
-    def _log_stats_wandb(self, epoch: int):
+    def _log_stats_wandb(self, epoch: int, **kwargs):
         """
         Log stats in wandb.
         """
@@ -102,6 +103,7 @@ class CQLAlgorithm(object):
             to_log[train_prefix + "alpha_loss"] = stats["Alpha Loss"]
             to_log[train_prefix + "target_entropy"] = stats["Target Entropy"]
 
+        to_log.update(**kwargs)
         wandb.log(to_log)
 
     def to(self, device):
